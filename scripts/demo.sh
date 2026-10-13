@@ -18,7 +18,10 @@ fi
 
 if ! nats-server --help >/dev/null 2>&1; then echo "install nats-server: brew install nats-server nats-io/nats-tools/nats"; exit 1; fi
 if ! nc -z 127.0.0.1 4222 2>/dev/null; then
-  nats-server -p 4222 -m 8222 > .run/nats.log 2>&1 & echo $! > .run/nats.pid
+  mkdir -p "$HOME/.agent-mesh/nats"
+  # -js turns on JetStream (sessions are saved in its KV store); -sd keeps
+  # that data in a permanent folder so it survives reboots.
+  nats-server -p 4222 -js -sd "$HOME/.agent-mesh/nats" -m 8222 > .run/nats.log 2>&1 & echo $! > .run/nats.pid
   sleep 0.5
 fi
 

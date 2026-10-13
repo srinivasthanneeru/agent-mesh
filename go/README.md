@@ -25,6 +25,7 @@ go/
 ├── agent/           Host + Responder: turn any Go func into an agent        (answering side)
 ├── mesh/            Mesh: discover, liveness, Prompt, Fanout, MatchTargets  (asking side)
 ├── claude/          drive the Claude Code CLI, translate stream-json → chunks
+├── kvstore/         Store interface: JetStream KV or memory; keeps sessions across restarts
 ├── ollama/          Ollama adapter: token streaming + conversation memory over its HTTP API
 │   └── ollamatest/  a fake Ollama server (like net/http/httptest) for tests and demos
 ├── internal/env/    connect to NATS, owner name, Ctrl-C handling
@@ -112,6 +113,27 @@ model returns 404 with the `ollama pull` command; and a first-token watchdog
 
 No Ollama yet? `FAKE_OLLAMA=1 scripts/demo.sh` uses `cmd/fakeollama`, which
 speaks the same API and replies deterministically.
+
+## Retained sessions
+
+Agents save their sessions in NATS's own key-value store (JetStream KV,
+bucket `agent_mesh`), so a restart doesn't lose them. Start nats-server with
+`-js` (the demo script does, storing data in `~/.agent-mesh/nats`).
+
+- **Claude agent:** keeps its Claude session id. After a restart it continues
+  the same conversation. Every reply ends with
+  `continue in Claude Code: cd <dir> && claude --resume <id>`. Send `/session`
+  to see it, `/new` to start over (the old conversation stays in Claude Code).
+- **Ollama agent:** keeps each conversation's messages. `/reset` deletes them.
+
+```bash
+nats kv ls agent_mesh                 # what's saved
+nats kv get agent_mesh claude.<you>.<dir>
+```
+
+Go ideas in `kvstore/`: an interface with two implementations (`jsStore`,
+`memStore`), chosen in `main()` (dependency injection), and one test table run
+against both (`TestStores`).
 
 ## What's different from the TypeScript version
 

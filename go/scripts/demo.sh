@@ -16,7 +16,10 @@ if [[ "${1:-}" == stop ]]; then stop_fleet; echo stopped; exit 0; fi
 
 go build -o bin/ ./cmd/...
 if ! nc -z 127.0.0.1 4222 2>/dev/null; then
-  nats-server -p 4222 > .run/nats.log 2>&1 &
+  mkdir -p "$HOME/.agent-mesh/nats"
+  # -js turns on JetStream (sessions are saved in its KV store); -sd keeps
+  # that data in a permanent folder so it survives reboots.
+  nats-server -p 4222 -js -sd "$HOME/.agent-mesh/nats" > .run/nats.log 2>&1 &
   sleep 0.5
 fi
 stop_fleet   # re-running replaces the fleet instead of adding duplicates

@@ -1,12 +1,13 @@
 // Command ollama puts a local Ollama model on the fabric, with conversation
-// memory and token-by-token streaming.
+// memory and token-by-token streaming. Conversations are saved in the NATS KV
+// bucket "agent_mesh" (needs nats-server -js), so they survive restarts.
 //
 //	go run ./cmd/ollama -model llama3.2 [-name llama] [-system "You are terse."] [-history 40]
 //
 // Talking to it:
 //
 //	@llama what is NATS?        normal prompt; it remembers earlier turns
-//	@llama /reset               forget this conversation
+//	@llama /reset               forget this conversation (also deletes the saved copy)
 //	@llama /history             show what it remembers
 //
 // Callers can keep separate memories by adding "conversation": "<id>" to
@@ -25,6 +26,7 @@ import (
 
 	"agentmesh/agent"
 	"agentmesh/internal/env"
+	"agentmesh/kvstore"
 	"agentmesh/ollama"
 	"agentmesh/protocol"
 )
@@ -44,26 +46,37 @@ func main() {
 		// "llama3.2:3b" → "llama3-2-3b"
 		*name = protocol.SanitizeToken(strings.NewReplacer(":", "-", ".", "-").Replace(*model))
 	}
-	oa := ollama.New(ollama.Options{BaseURL: *url, Model: *model, System: *system, MaxHistory: *history, KeepAlive: *keepAlive, Think: *think})
 	if *think != "" && *think != "true" && *think != "false" {
 		log.Fatalf(`-think must be "true", "false" or empty, got %q`, *think)
 	}
-
-	// Warn early (but keep running) if Ollama is down or the model is missing:
-	// the user can start Ollama or pull the model while the agent waits.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	if models, err := oa.Models(ctx); err != nil {
-		log.Printf("warning: %v", err)
-	} else if !ollama.HasModel(models, *model) {
-		log.Printf("warning: model %q is not installed; run: ollama pull %s (installed: %s)", *model, *model, strings.Join(models, ", "))
-	}
-	cancel()
 
 	nc, err := env.Connect("ollama-agent")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer nc.Drain()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	store, warning := kvstore.Open(ctx, nc)
+	cancel()
+	if warning != "" {
+		log.Printf("warning: %s", warning)
+	}
+
+	oa := ollama.New(ollama.Options{
+		BaseURL: *url, Model: *model, System: *system, MaxHistory: *history, KeepAlive: *keepAlive, Think: *think,
+		Store: store, KeyPrefix: kvstore.Key("ollama", *owner, *name),
+	})
+
+	// Warn early (but keep running) if Ollama is down or the model is missing:
+	// the user can start Ollama or pull the model while the agent waits.
+	ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+	if models, err := oa.Models(ctx); err != nil {
+		log.Printf("warning: %v", err)
+	} else if !ollama.HasModel(models, *model) {
+		log.Printf("warning: model %q is not installed; run: ollama pull %s (installed: %s)", *model, *model, strings.Join(models, ", "))
+	}
+	cancel()
 
 	h, err := agent.New(agent.Options{
 		Conn:        nc,
@@ -79,11 +92,19 @@ func main() {
 			conv := conversationID(e)
 			switch strings.TrimSpace(e.Prompt) {
 			case "/reset":
-				oa.Reset(conv)
+				if err := oa.Reset(ctx, conv); errors.Is(err, ollama.ErrBusy) {
+					return protocol.Errorf(409, "%v", err)
+				} else if err != nil {
+					return err
+				}
 				res.Send("Conversation forgotten.")
 				return nil
 			case "/history":
-				res.Send(formatHistory(oa.History(conv)))
+				history, err := oa.History(ctx, conv)
+				if err != nil {
+					return err
+				}
+				res.Send(formatHistory(history))
 				return nil
 			}
 			u, err := oa.Chat(ctx, conv, e.Prompt, res)
@@ -93,10 +114,11 @@ func main() {
 			if err != nil {
 				return err
 			}
+			remembered, _ := oa.History(ctx, conv)
 			res.Raw("usage", map[string]any{
 				"model": *model, "prompt_tokens": u.PromptTokens, "output_tokens": u.OutputTokens,
 				"tokens_per_sec": u.TokensPerSec, "duration_ms": u.DurationMs,
-				"remembered": len(oa.History(conv)),
+				"remembered": len(remembered), "saved_in": store.Kind(),
 			})
 			return nil
 		},
@@ -107,6 +129,7 @@ func main() {
 	if err := h.Start(); err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("conversations stored in %s", store.Kind())
 	sig, stop := env.SignalContext()
 	defer stop()
 	<-sig.Done()

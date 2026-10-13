@@ -32,6 +32,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"agentmesh/kvstore"
 	"agentmesh/protocol"
 )
 
@@ -59,7 +60,15 @@ type Options struct {
 	// "" = the model's default, "true" / "false" = force it on or off.
 	Think string
 	HTTP  *http.Client
+	// Store, if set, keeps conversations across restarts. Each conversation
+	// is saved as JSON under KeyPrefix + "." + conversation id.
+	Store     kvstore.Store
+	KeyPrefix string // e.g. "ollama.srini.llama3-2"
 }
+
+// maxStoredBytes keeps a saved conversation under the NATS default 1 MB
+// message limit; the oldest exchanges are dropped first.
+const maxStoredBytes = 900 << 10
 
 // Usage is what Ollama reports when a reply finishes.
 type Usage struct {
@@ -150,33 +159,94 @@ func HasModel(installed []string, name string) bool {
 	return false
 }
 
-// History returns a copy of a conversation's messages.
-func (a *Adapter) History(conv string) []Message {
+func (a *Adapter) key(conv string) string { return a.opts.KeyPrefix + "." + kvstore.Key(conv) }
+
+// get returns the conversation, loading it from the Store the first time.
+// The Store call happens without holding a.mu, so a slow load never blocks
+// other conversations; if two callers race, the first one to finish wins.
+func (a *Adapter) get(ctx context.Context, name string) (*conversation, error) {
+	a.mu.Lock()
+	c := a.convs[name]
+	a.mu.Unlock()
+	if c != nil {
+		return c, nil
+	}
+
+	var history []Message
+	if a.opts.Store != nil {
+		b, err := a.opts.Store.Get(ctx, a.key(name))
+		if err != nil {
+			return nil, fmt.Errorf("load conversation %q: %w", name, err)
+		}
+		if b != nil && json.Unmarshal(b, &history) != nil {
+			history = nil // unreadable (e.g. hand-edited): start fresh rather than fail every turn
+		}
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if c := a.convs[conv]; c != nil {
-		return append([]Message(nil), c.history...)
+	if c := a.convs[name]; c != nil {
+		return c, nil
 	}
-	return nil
+	c = &conversation{history: history}
+	a.convs[name] = c
+	return c, nil
 }
 
-// Reset forgets a conversation.
-func (a *Adapter) Reset(conv string) {
+// save writes a conversation to the Store, dropping the oldest exchanges
+// until it fits.
+func (a *Adapter) save(ctx context.Context, name string, history []Message) error {
+	if a.opts.Store == nil {
+		return nil
+	}
+	for {
+		b, err := json.Marshal(history)
+		if err != nil {
+			return err
+		}
+		if len(b) <= maxStoredBytes || len(history) <= 2 {
+			return a.opts.Store.Put(ctx, a.key(name), b)
+		}
+		history = history[2:] // one user + assistant pair
+	}
+}
+
+// History returns a copy of a conversation's messages.
+func (a *Adapter) History(ctx context.Context, conv string) ([]Message, error) {
+	c, err := a.get(ctx, conv)
+	if err != nil {
+		return nil, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return append([]Message(nil), c.history...), nil
+}
+
+// Reset forgets a conversation, in memory and in the Store. It refuses while
+// the conversation is answering, since that reply would save it right back.
+func (a *Adapter) Reset(ctx context.Context, conv string) error {
+	a.mu.Lock()
+	if c := a.convs[conv]; c != nil && c.busy {
+		a.mu.Unlock()
+		return ErrBusy
+	}
 	delete(a.convs, conv)
+	a.mu.Unlock()
+	if a.opts.Store != nil {
+		return a.opts.Store.Delete(ctx, a.key(conv))
+	}
+	return nil
 }
 
 // Chat sends prompt with the conversation's history, streams each token to
 // sink as it arrives, and on success remembers both sides of the exchange.
 // A failed or cancelled reply is not remembered, so it can't poison later turns.
 func (a *Adapter) Chat(ctx context.Context, conv, prompt string, sink Sink) (Usage, error) {
-	a.mu.Lock()
-	c := a.convs[conv]
-	if c == nil {
-		c = &conversation{}
-		a.convs[conv] = c
+	c, err := a.get(ctx, conv)
+	if err != nil {
+		return Usage{}, err
 	}
+	a.mu.Lock()
 	if c.busy {
 		a.mu.Unlock()
 		return Usage{}, ErrBusy
@@ -208,7 +278,13 @@ func (a *Adapter) Chat(ctx context.Context, conv, prompt string, sink Sink) (Usa
 	if over := len(c.history) - a.opts.MaxHistory; over > 0 {
 		c.history = c.history[over:] // keep the newest messages
 	}
+	snapshot := append([]Message(nil), c.history...)
 	a.mu.Unlock()
+
+	// The answer was already delivered, so a failed save is a warning, not an error.
+	if err := a.save(ctx, conv, snapshot); err != nil {
+		sink.Raw("status_note", map[string]string{"message": "answered, but could not save the conversation: " + err.Error()})
+	}
 	return usage, nil
 }
 

@@ -3,6 +3,22 @@
 Working log for picking this project up later in Claude Code or Codex.
 Newest status first.
 
+## Status (2026-10-13)
+
+- **Retained sessions (done):** new `go/kvstore` package (JetStream KV with an
+  in-memory fallback). The Claude agent saves its Claude session id and
+  resumes it after a restart, and every reply shows
+  `cd <dir> && claude --resume <id>`; `/session` and `/new` commands. The
+  Ollama agent saves each conversation and reloads it after a restart. Verified
+  live: llama3.2 recalled the user's name after an agent restart; Claude
+  resumed (fake CLI). Demo scripts now start nats-server with
+  `-js -sd ~/.agent-mesh/nats`.
+- The Mac had restarted, so the long-running nats-server (port 4222) was gone.
+  Start it again with `scripts/demo.sh` (it now enables JetStream).
+- The Ollama desktop app is now installed and is the local Ollama server
+  (models stay local; the app connects to ollama.com only for optional account
+  and cloud features).
+
 ## Status (2026-10-12)
 
 - Go implementation (`go/`): builds; `go test -race ./...` passes (claude,
@@ -36,6 +52,8 @@ Newest status first.
 3. Relay Claude's permission prompts as §7 mid-stream queries (needs
    `--permission-prompt-tool` via MCP); today permission mode is fixed at spawn.
 4. Ollama `/model <name>` command per conversation (exercise 5 in go/README.md).
+4b. Persist `cc-pool` controller sessions too (today only `cmd/claude` saves its
+   session id); port retained sessions to the TypeScript side if it is kept.
 5. Not implemented (spec defers most): JetStream at-least-once delivery, the
    `attachments` upload endpoint, §13 signed sender identity, E2E encryption,
    a browser UI.
@@ -69,8 +87,9 @@ Newest status first.
   `-c user.name=... -c user.email=...` when committing.
 
 - Go is the primary implementation going forward; TS kept for reference.
-- Memory lives in the agent process (in RAM). Restarting an agent forgets
-  conversations; JetStream KV would be the natural place to persist them.
+- Sessions are retained in NATS JetStream KV (bucket `agent_mesh`), not files:
+  NATS is already the shared fabric, so any agent on any machine can reach
+  them, and no new software is needed. Only state from successful turns is saved.
 - One conversation answers one prompt at a time (409 if busy); different
   conversations run in parallel.
 - Agent names: Claude `cc/<owner>/<dir>`, Ollama `ollama/<owner>/<model>`,

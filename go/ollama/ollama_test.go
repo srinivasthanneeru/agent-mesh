@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"agentmesh/kvstore"
 	"agentmesh/ollama/ollamatest"
 	"agentmesh/protocol"
 )
@@ -24,6 +25,16 @@ func (r *recorder) Send(t string, _ ...protocol.Attachment) {
 }
 func (r *recorder) Raw(string, any) {}
 func (r *recorder) text() string    { return strings.Join(r.chunks, "") }
+
+// history is a test helper: History with the error checked.
+func history(t *testing.T, a *Adapter, conv string) []Message {
+	t.Helper()
+	h, err := a.History(context.Background(), conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
 
 func setup(t *testing.T, opts Options) (*Adapter, *ollamatest.Server) {
 	t.Helper()
@@ -71,7 +82,7 @@ func TestRemembersTheConversation(t *testing.T) {
 	if strings.Join(roles, ",") != "system,user,assistant,user" || second[1]["content"] != "my name is Srini" {
 		t.Fatalf("turn 2 messages: %v", second)
 	}
-	if n := len(a.History("default")); n != 4 {
+	if n := len(history(t, a, "default")); n != 4 {
 		t.Fatalf("history has %d messages, want 4", n)
 	}
 }
@@ -92,7 +103,7 @@ func TestHistoryIsCapped(t *testing.T) {
 	for i := range 5 {
 		_, _ = a.Chat(context.Background(), "c", "msg"+string(rune('0'+i)), &recorder{})
 	}
-	h := a.History("c")
+	h := history(t, a, "c")
 	if len(h) != 4 || h[0].Content != "msg3" {
 		t.Fatalf("history %v", h)
 	}
@@ -101,7 +112,9 @@ func TestHistoryIsCapped(t *testing.T) {
 func TestResetForgets(t *testing.T) {
 	a, _ := setup(t, Options{})
 	_, _ = a.Chat(context.Background(), "default", "one", &recorder{})
-	a.Reset("default")
+	if err := a.Reset(context.Background(), "default"); err != nil {
+		t.Fatal(err)
+	}
 	var r recorder
 	_, _ = a.Chat(context.Background(), "default", "two", &r)
 	if !strings.Contains(r.text(), "remember 0") {
@@ -115,7 +128,7 @@ func TestFailedTurnIsNotRemembered(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "out of memory") {
 		t.Fatalf("want mid-stream error, got %v", err)
 	}
-	if n := len(a.History("default")); n != 0 {
+	if n := len(history(t, a, "default")); n != 0 {
 		t.Fatalf("failed turn was remembered (%d messages)", n)
 	}
 }
@@ -171,4 +184,59 @@ func TestModelsAndHasModel(t *testing.T) {
 	if err != nil || !HasModel(models, "llama3.2") || HasModel(models, "mistral") {
 		t.Fatalf("models %v, err %v", models, err)
 	}
+}
+
+// A "restart" is simply a new Adapter sharing the same Store.
+func TestConversationSurvivesRestart(t *testing.T) {
+	fake := ollamatest.New()
+	t.Cleanup(fake.Close)
+	store := kvstore.NewMemory()
+	opts := Options{BaseURL: fake.URL, Model: "llama3.2", Store: store, KeyPrefix: "ollama.t.llama"}
+	ctx := context.Background()
+
+	before := New(opts)
+	if _, err := before.Chat(ctx, "default", "my name is Srini", &recorder{}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := store.Get(ctx, "ollama.t.llama.default"); !strings.Contains(string(b), "my name is Srini") {
+		t.Fatalf("not saved under the expected key: %s", b)
+	}
+
+	after := New(opts) // the agent restarted
+	var r recorder
+	if _, err := after.Chat(ctx, "default", "what is my name?", &r); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.text(), "remember 1 earlier") {
+		t.Fatalf("restart lost memory: %q", r.text())
+	}
+
+	if err := after.Reset(ctx, "default"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := store.Get(ctx, "ollama.t.llama.default"); b != nil {
+		t.Fatalf("reset left data in the store: %s", b)
+	}
+}
+
+func TestOddConversationIDsMakeSafeKeys(t *testing.T) {
+	a, _ := setup(t, Options{Store: kvstore.NewMemory(), KeyPrefix: "ollama.t.m"})
+	if got := a.key("alice.smith @work"); got != "ollama.t.m.alice_smith__work" {
+		t.Fatalf("key = %q", got)
+	}
+}
+
+func TestResetRefusedWhileAnswering(t *testing.T) {
+	a, fake := setup(t, Options{})
+	fake.TokenDelay = 50 * time.Millisecond
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = a.Chat(context.Background(), "default", "slow one", &recorder{})
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if err := a.Reset(context.Background(), "default"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("want ErrBusy, got %v", err)
+	}
+	<-done
 }

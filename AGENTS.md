@@ -24,6 +24,7 @@ agent-mesh/
 │   ├── agent/     Host + Responder: turn a Go func into an agent (answering side)
 │   ├── mesh/      Mesh: Discover, Prompt, Fanout (iter.Seq), MatchTargets (asking side)
 │   ├── claude/    drives the `claude` CLI (stream-json) → chunks; session memory via --resume
+│   ├── kvstore/   Store interface: JetStream KV (durable) or in-memory; retains sessions
 │   ├── ollama/    Ollama /api/chat adapter: token streaming + conversation memory
 │   │   └── ollamatest/  fake Ollama server for tests and offline demos
 │   ├── cmd/       programs: echo shell claude ollama cliagent controller meta mesh fakeollama
@@ -61,6 +62,24 @@ Env: `NATS_URL` (default nats://127.0.0.1:4222), `NATS_CREDS`, `MESH_OWNER`,
 `CLAUDE_BIN` (point at `go/claude/testdata/fake-claude.sh` or
 `test/fixtures/fake-claude.mjs` for offline runs), `CLAUDE_FIRST_OUTPUT_S`,
 `OLLAMA_HOST`.
+
+## Retained sessions
+
+Agents save sessions in the JetStream KV bucket `agent_mesh`, so they survive
+restarts. **nats-server must run with JetStream** (`-js`); both demo scripts
+start it with `-js -sd ~/.agent-mesh/nats` (permanent storage). Without it,
+agents log a warning and fall back to memory.
+
+| Key | Value | Written by |
+|---|---|---|
+| `claude.<owner>.<name>` | Claude Code session id | `cmd/claude` after each successful turn; deleted by `/new` |
+| `ollama.<owner>.<name>.<conversation>` | JSON message history | `cmd/ollama` after each successful turn; deleted by `/reset` |
+
+Inspect with `nats kv ls agent_mesh` / `nats kv get agent_mesh <key>`. The
+Claude agent's replies end with `cd <dir> && claude --resume <id>`, which
+continues the same conversation in Claude Code (sessions are per directory).
+Agent commands: Claude `/session`, `/new`; Ollama `/history`, `/reset`.
+Not persisted yet: `cc-pool` controller sessions, per-session cost totals.
 
 ## Protocol rules that matter when changing code
 

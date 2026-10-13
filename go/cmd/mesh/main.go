@@ -422,7 +422,11 @@ func describeChunk(c *protocol.Chunk) string {
 			return fmt.Sprintf("%v: %.0f tokens in, %.0f out, %.1f tok/s, remembers %.0f messages",
 				d["model"], num(d["prompt_tokens"]), num(d["output_tokens"]), num(d["tokens_per_sec"]), num(d["remembered"]))
 		}
-		return fmt.Sprintf("$%.4f this turn, $%.4f session", num(d["cost_usd"]), num(d["total_cost_usd"]))
+		s := fmt.Sprintf("$%.4f this turn, $%.4f session", num(d["cost_usd"]), num(d["total_cost_usd"]))
+		if resume, ok := d["resume"].(string); ok {
+			s += "\ncontinue in Claude Code: " + resume
+		}
+		return s
 	case "plan":
 		var p struct {
 			Targets []struct{ Agent string } `json:"targets"`

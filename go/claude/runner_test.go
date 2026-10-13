@@ -85,3 +85,50 @@ func TestWatchdogStopsAStalledCLI(t *testing.T) {
 		t.Fatalf("took %s: the process group was not killed", time.Since(start))
 	}
 }
+
+func TestSessionIDIsReportedAndRestorable(t *testing.T) {
+	var saved []string
+	bin, _ := filepath.Abs("testdata/fake-claude.sh")
+	opts := Options{Dir: t.TempDir(), Bin: bin, OnSession: func(id string) { saved = append(saved, id) }}
+
+	s := NewSession(opts)
+	if _, err := s.Run(context.Background(), "hi", &recorder{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(saved, ",") != "sess-1" {
+		t.Fatalf("OnSession calls: %v", saved)
+	}
+
+	// A new Session (the agent restarted) resumes the saved id.
+	restarted := NewSession(opts)
+	restarted.Resume(saved[0])
+	var r recorder
+	if _, err := restarted.Run(context.Background(), "again", &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.text.String() != "(resumed) got: again" {
+		t.Fatalf("did not resume: %q", r.text.String())
+	}
+	if len(saved) != 1 { // same id again: no extra save
+		t.Fatalf("unexpected OnSession calls: %v", saved)
+	}
+
+	restarted.Forget()
+	if restarted.SessionID() != "" || saved[len(saved)-1] != "" {
+		t.Fatalf("Forget: id %q, calls %v", restarted.SessionID(), saved)
+	}
+}
+
+func TestStaleRestoredIDIsDropped(t *testing.T) {
+	var saved []string
+	bin, _ := filepath.Abs("testdata/fake-claude.sh")
+	s := NewSession(Options{Dir: t.TempDir(), Bin: bin, OnSession: func(id string) { saved = append(saved, id) }})
+	s.Resume("stale")
+	if _, err := s.Run(context.Background(), "hi", &recorder{}); err != nil {
+		t.Fatal(err)
+	}
+	// "" when the stale id is dropped, then the fresh conversation's id.
+	if strings.Join(saved, ",") != ",sess-1" {
+		t.Fatalf("OnSession calls: %q", saved)
+	}
+}

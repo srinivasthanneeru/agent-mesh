@@ -44,6 +44,10 @@ type Options struct {
 	// giving up. The CLI retries silently forever on some failures (for
 	// example an expired login). Default: $CLAUDE_FIRST_OUTPUT_S or 90s.
 	FirstOutput time.Duration
+	// OnSession, if set, is called whenever the Claude session id changes:
+	// with the new id after a successful turn, or "" when the conversation
+	// is dropped. Agents use it to save the id so a restart can resume.
+	OnSession func(id string)
 }
 
 // Result summarises one turn.
@@ -91,6 +95,38 @@ func (s *Session) Stats() (busy bool, turns int, totalCost float64, sessionID st
 	return s.busy, s.turns, s.totalCost, s.sessionID
 }
 
+// SessionID is the Claude conversation the next turn will continue ("" = new).
+func (s *Session) SessionID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionID
+}
+
+// Resume makes the next turn continue an existing Claude conversation, for
+// example one saved before the agent restarted. If Claude no longer has it,
+// Run falls back to a fresh conversation by itself.
+func (s *Session) Resume(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionID = id
+}
+
+// Forget makes the next turn start a new conversation.
+func (s *Session) Forget() { s.setSessionID("") }
+
+// setSessionID updates the id and, if it changed, tells OnSession. The
+// callback runs after the lock is released so it may take its time (and
+// could even call back into the Session without deadlocking).
+func (s *Session) setSessionID(id string) {
+	s.mu.Lock()
+	changed := s.sessionID != id
+	s.sessionID = id
+	s.mu.Unlock()
+	if changed && s.opts.OnSession != nil {
+		s.opts.OnSession(id)
+	}
+}
+
 // Run executes one turn, streaming output into sink.
 func (s *Session) Run(ctx context.Context, prompt string, sink Sink) (Result, error) {
 	s.mu.Lock()
@@ -112,9 +148,7 @@ func (s *Session) Run(ctx context.Context, prompt string, sink Sink) (Result, er
 	// A conversation that can't be resumed (never saved, deleted, other
 	// machine) fails before any turn runs: start a fresh one instead.
 	if err == nil && resumed && r.failedToStart && ctx.Err() == nil {
-		s.mu.Lock()
-		s.sessionID = ""
-		s.mu.Unlock()
+		s.setSessionID("")
 		sink.Raw("status_note", map[string]string{"message": "previous conversation unavailable; starting a new one"})
 		r, err = s.exec(ctx, prompt, sink)
 	}
@@ -267,9 +301,10 @@ func (s *Session) exec(ctx context.Context, prompt string, sink Sink) (Result, e
 			res.IsError, res.CostUSD, res.DurationMs, res.Turns = ev.IsError, ev.CostUSD, ev.Duration, ev.NumTurns
 			if !ev.IsError {
 				s.mu.Lock()
-				s.sessionID = firstNonEmpty(ev.SessionID, pendingSession, s.sessionID)
+				newID := firstNonEmpty(ev.SessionID, pendingSession, s.sessionID)
 				s.totalCost += ev.CostUSD
 				s.mu.Unlock()
+				s.setSessionID(newID)
 				break
 			}
 			// Never end an errored turn silently: fall back to the subtype and stderr.
