@@ -63,7 +63,8 @@ Newest status first.
 ## Decisions
 
 - Git repo at the project root (`~/code/agent-mesh`); `~/code` itself is not a
-  repo and holds unrelated projects. No remote yet. Git has no global
+  repo and holds unrelated projects. Remote: `origin` =
+  git@github.com:srinivasthanneeru/work-with-multi-agents.git (public), branch `main`. Git has no global
   user.name/email on this Mac, so set one (`git config --global ...`) or pass
   `-c user.name=... -c user.email=...` when committing.
 
