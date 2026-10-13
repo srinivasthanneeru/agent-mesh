@@ -26,6 +26,7 @@ go/
 ├── mesh/            Mesh: discover, liveness, Prompt, Fanout, MatchTargets  (asking side)
 ├── claude/          drive the Claude Code CLI, translate stream-json → chunks
 ├── kvstore/         Store interface: JetStream KV or memory; keeps sessions across restarts
+├── meshmcp/         MCP server so Claude Desktop / Claude Code / Codex can see and continue sessions
 ├── ollama/          Ollama adapter: token streaming + conversation memory over its HTTP API
 │   └── ollamatest/  a fake Ollama server (like net/http/httptest) for tests and demos
 ├── internal/env/    connect to NATS, owner name, Ctrl-C handling
@@ -134,6 +135,41 @@ nats kv get agent_mesh claude.<you>.<dir>
 Go ideas in `kvstore/`: an interface with two implementations (`jsStore`,
 `memStore`), chosen in `main()` (dependency injection), and one test table run
 against both (`TestStores`).
+
+## Seeing sessions in Claude Desktop, Claude Code and Codex (MCP)
+
+`bin/meshmcp` is an MCP server. Register it once in an app and you can ask,
+in plain language, "show my mesh sessions", "show my llama conversation" or
+"ask llama what my name is": the app calls the tools below, and every app
+shares the same saved sessions.
+
+| Tool | Does |
+|---|---|
+| `mesh_agents` | lists online agents |
+| `mesh_ask` | prompts agents; continues their saved conversation (`conversation` for Ollama) |
+| `mesh_sessions` | lists saved Ollama conversations and Claude Code sessions |
+| `mesh_session` | shows one in full (+ `claude --resume` command for Claude sessions) |
+
+Register it:
+
+```jsonc
+// Claude Desktop: ~/Library/Application Support/Claude/claude_desktop_config.json
+"mcpServers": { "agent-mesh": { "command": "/Users/<you>/code/agent-mesh/go/bin/meshmcp" } }
+```
+```bash
+claude mcp add --scope user agent-mesh -- ~/code/agent-mesh/go/bin/meshmcp   # Claude Code
+```
+```toml
+# Codex: ~/.codex/config.toml
+[mcp_servers.agent-mesh]
+command = "/Users/<you>/code/agent-mesh/go/bin/meshmcp"
+```
+
+The NATS fleet must be running (`scripts/demo.sh`). Questions agents ask
+mid-answer are always declined through MCP: approve those in `bin/mesh chat`.
+Go ideas in `meshmcp/`: generic `mcp.AddTool[In, Out]` builds each tool's JSON
+schema from a struct's tags; tests drive the server with a real MCP client
+over in-memory pipes.
 
 ## What's different from the TypeScript version
 

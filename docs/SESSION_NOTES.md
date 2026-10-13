@@ -3,6 +3,21 @@
 Working log for picking this project up later in Claude Code or Codex.
 Newest status first.
 
+## Status (2026-10-13, later)
+
+- **MCP server (done):** `go/meshmcp` +
+  `go/cmd/meshmcp` let Claude Desktop (and later Codex) see and continue mesh
+  sessions. Verified live by launching `bin/meshmcp` over stdio against the
+  running mesh: listed and showed the saved llama conversation, continued it
+  ("Your name is Srini."), and auto-declined the shell agent's approval
+  question. Registered in Claude Desktop only (user's choice); Claude Code and
+  Codex registration commands are in AGENTS.md.
+- Why MCP rather than writing into each app's storage: the Ollama app's chat
+  API needs an internal token and its SQLite schema is internal (v19) and
+  changes often; Claude/Codex session files are undocumented too. MCP is the
+  supported, shared interface, and NATS stays the single source of truth.
+- Ollama app note: its settings include an airplane mode (keeps it offline).
+
 ## Status (2026-10-13)
 
 - **Retained sessions (done):** new `go/kvstore` package (JetStream KV with an

@@ -12,6 +12,7 @@ package kvstore
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 
@@ -30,6 +31,8 @@ type Store interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 	Put(ctx context.Context, key string, value []byte) error
 	Delete(ctx context.Context, key string) error
+	// Keys lists the keys starting with prefix ("" = all), sorted.
+	Keys(ctx context.Context, prefix string) ([]string, error)
 	// Kind describes where data lives, for log messages ("jetstream:agent_mesh").
 	Kind() string
 }
@@ -86,6 +89,17 @@ func (s *jsStore) Delete(ctx context.Context, key string) error {
 	return err
 }
 
+func (s *jsStore) Keys(ctx context.Context, prefix string) ([]string, error) {
+	all, err := s.kv.Keys(ctx)
+	if errors.Is(err, jetstream.ErrNoKeysFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return filterSorted(all, prefix), nil
+}
+
 func (s *jsStore) Kind() string { return "jetstream:" + s.bucket }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +137,28 @@ func (m *memStore) Delete(_ context.Context, key string) error {
 	return nil
 }
 
+func (m *memStore) Keys(_ context.Context, prefix string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	all := make([]string, 0, len(m.data))
+	for k := range m.data {
+		all = append(all, k)
+	}
+	return filterSorted(all, prefix), nil
+}
+
 func (m *memStore) Kind() string { return "memory (lost on restart)" }
+
+func filterSorted(keys []string, prefix string) []string {
+	var out []string
+	for _, k := range keys {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // ---------------------------------------------------------------------------
 

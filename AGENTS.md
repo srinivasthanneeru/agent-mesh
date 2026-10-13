@@ -25,6 +25,7 @@ agent-mesh/
 │   ├── mesh/      Mesh: Discover, Prompt, Fanout (iter.Seq), MatchTargets (asking side)
 │   ├── claude/    drives the `claude` CLI (stream-json) → chunks; session memory via --resume
 │   ├── kvstore/   Store interface: JetStream KV (durable) or in-memory; retains sessions
+│   ├── meshmcp/   MCP server: mesh_agents / mesh_ask / mesh_sessions / mesh_session
 │   ├── ollama/    Ollama /api/chat adapter: token streaming + conversation memory
 │   │   └── ollamatest/  fake Ollama server for tests and offline demos
 │   ├── cmd/       programs: echo shell claude ollama cliagent controller meta mesh fakeollama
@@ -80,6 +81,26 @@ Claude agent's replies end with `cd <dir> && claude --resume <id>`, which
 continues the same conversation in Claude Code (sessions are per directory).
 Agent commands: Claude `/session`, `/new`; Ollama `/history`, `/reset`.
 Not persisted yet: `cc-pool` controller sessions, per-session cost totals.
+
+## MCP server (seeing sessions from other apps)
+
+`go/cmd/meshmcp` exposes the mesh over MCP (stdio), so Claude Desktop, Claude
+Code, Codex or any MCP client can list, read and continue the same sessions:
+
+- `mesh_agents`: who is online. `mesh_ask {target, prompt, conversation?}`:
+  prompt agents, continuing their saved conversation.
+- `mesh_sessions {agent?}` / `mesh_session {session}`: saved Ollama
+  conversations (from KV) and Claude Code sessions (id from KV, transcript
+  read-only from `~/.claude/projects/*/<id>.jsonl`, with the resume command).
+- Safety: agent questions (§7 queries) are always answered "no" via MCP, since
+  the caller is another AI; approvals happen in `bin/mesh chat`.
+
+Registered in Claude Desktop (`~/Library/Application Support/Claude/
+claude_desktop_config.json`, `mcpServers.agent-mesh`, a backup was made).
+Not registered in Claude Code or Codex yet; to add them:
+`claude mcp add --scope user agent-mesh -- ~/code/agent-mesh/go/bin/meshmcp`
+and `[mcp_servers.agent-mesh] command = "…/go/bin/meshmcp"` in
+`~/.codex/config.toml`. Rebuild with `go build -o bin/ ./cmd/...` after changes.
 
 ## Protocol rules that matter when changing code
 

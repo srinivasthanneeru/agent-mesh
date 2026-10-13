@@ -54,11 +54,21 @@ func TestStores(t *testing.T) {
 			if v, _ := s.Get(ctx, "a.b"); !bytes.Equal(v, []byte("two")) {
 				t.Fatalf("got %q", v)
 			}
+			_ = s.Put(ctx, "a.c", []byte("x"))
+			_ = s.Put(ctx, "z.y", []byte("x"))
+			if keys, err := s.Keys(ctx, "a."); err != nil || strings.Join(keys, ",") != "a.b,a.c" {
+				t.Fatalf("Keys(a.) = %v, %v", keys, err)
+			}
+			_ = s.Delete(ctx, "a.c")
+			_ = s.Delete(ctx, "z.y")
 			if err := s.Delete(ctx, "a.b"); err != nil {
 				t.Fatal(err)
 			}
 			if v, _ := s.Get(ctx, "a.b"); v != nil {
 				t.Fatalf("after delete: %q", v)
+			}
+			if keys, err := s.Keys(ctx, ""); err != nil || len(keys) != 0 {
+				t.Fatalf("empty store Keys = %v, %v", keys, err)
 			}
 			if err := s.Delete(ctx, "never.there"); err != nil {
 				t.Fatalf("deleting a missing key should be fine: %v", err)
