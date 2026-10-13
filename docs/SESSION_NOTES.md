@@ -64,7 +64,7 @@ Newest status first.
 
 - Git repo at the project root (`~/code/agent-mesh`); `~/code` itself is not a
   repo and holds unrelated projects. Remote: `origin` =
-  git@github.com:srinivasthanneeru/work-with-multi-agents.git (public), branch `main`. Git has no global
+  git@github.com:srinivasthanneeru/agent-mesh.git (public), branch `main`. Git has no global
   user.name/email on this Mac, so set one (`git config --global ...`) or pass
   `-c user.name=... -c user.email=...` when committing.
 
