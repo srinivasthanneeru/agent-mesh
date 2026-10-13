@@ -1,0 +1,29 @@
+{
+  "name": "agent-mesh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A from-scratch implementation of the NATS agent protocol pattern: discoverable, promptable, streamable agents on a NATS fabric.",
+  "scripts": {
+    "mesh": "node --experimental-strip-types --no-warnings src/cli.ts",
+    "echo": "node --experimental-strip-types --no-warnings src/agents/echo.ts",
+    "shell": "node --experimental-strip-types --no-warnings src/agents/shell.ts",
+    "claude": "node --experimental-strip-types --no-warnings src/agents/claude.ts",
+    "controller": "node --experimental-strip-types --no-warnings src/controller.ts",
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "cli": "node --experimental-strip-types --no-warnings src/agents/cli.ts",
+    "meta": "node --experimental-strip-types --no-warnings src/agents/meta.ts"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "dependencies": {
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/services": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^5.9.3"
+  }
+}
