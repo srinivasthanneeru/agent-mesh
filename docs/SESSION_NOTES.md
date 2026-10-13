@@ -39,7 +39,6 @@ Newest status first.
 5. Not implemented (spec defers most): JetStream at-least-once delivery, the
    `attachments` upload endpoint, §13 signed sender identity, E2E encryption,
    a browser UI.
-6. No git repo yet: `git init` and an initial commit would checkpoint everything.
 
 ## How we got here
 
@@ -62,6 +61,11 @@ Newest status first.
    in a separate field → open item 1.
 
 ## Decisions
+
+- Git repo at the project root (`~/code/agent-mesh`); `~/code` itself is not a
+  repo and holds unrelated projects. No remote yet. Git has no global
+  user.name/email on this Mac, so set one (`git config --global ...`) or pass
+  `-c user.name=... -c user.email=...` when committing.
 
 - Go is the primary implementation going forward; TS kept for reference.
 - Memory lives in the agent process (in RAM). Restarting an agent forgets
